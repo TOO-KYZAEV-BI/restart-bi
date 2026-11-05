@@ -191,7 +191,7 @@
     $('#aiChips').innerHTML = ex.quick.map(q => `<button type="button" data-aiq="${esc(q)}">${esc(q)}</button>`).join('');
     $('#aiRole').textContent = ex.name + ' · ' + R.role().name;
     $('#aiStop').hidden = !cur; $('#aiSend').hidden = !!cur;
-    $('#aiNote').innerHTML = avail === false ? 'ИИ-помощник работает, когда система открыта в Claude под вашим аккаунтом. Здесь он недоступен.' : 'Отвечает по данным системы в пределах прав роли. Документы проводите вы сами. Запросы расходуют лимит вашего аккаунта Claude.';
+    $('#aiNote').innerHTML = avail === false ? (window.RS_AI_LOCAL ? window.RS_AI_LOCAL.note : 'ИИ-помощник работает, когда система открыта в Claude под вашим аккаунтом. Здесь он недоступен.') : 'Отвечает по данным системы в пределах прав роли. Документы проводите вы сами. Запросы расходуют лимит вашего аккаунта Claude.';
     const box = $('#aiMsgs'); box.scrollTop = box.scrollHeight;
   }
   function paintTools(){ const el = $('#aiTools'); if (el && cur) el.innerHTML = cur.tools.map(t => `<span>✓ ${esc(t)}</span>`).join(''); }
@@ -199,7 +199,8 @@
   async function ask(text){
     text = String(text || '').trim(); if (!text || cur) return;
     if (!sample){ try { sample = await window.claude?.use?.('sample'); } catch(e){} }
-    if (!sample){ avail = false; turns.push({ role: 'user', content: text }, { role: 'assistant', content: 'ИИ-помощник недоступен в этом окне. Откройте RESTART BI в Claude под своим аккаунтом.' }); saveTurns(); paint(); return; }
+    if (!sample){ avail = false; const loc = window.RS_AI_LOCAL; const ex0 = EXPERT[R.role().id] || EXPERT.owner;
+      turns.push({ role: 'user', content: text }, { role: 'assistant', ex: ex0.name, content: loc ? loc.answer(text) : 'ИИ-помощник недоступен в этом окне. Откройте RESTART BI в Claude под своим аккаунтом.' }); saveTurns(); paint(); return; }
     avail = true;
     turns.push({ role: 'user', content: text }); saveTurns();
     cur = { text: '', tools: [] }; ctl = new AbortController(); paint();
@@ -234,6 +235,6 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hidden && $('#modal').hidden) close(); });
   // смена роли — другой эксперт
   $('#roleSel').addEventListener('change', () => { if (!panel.hidden) paint(); });
-  window.claude?.use?.('sample').then(s => { sample = s; avail = !!s; if (!panel.hidden) paint(); }).catch(() => { avail = false; });
-  R.AI = { open, ask, close, EXPERT };
+  if (window.claude && window.claude.use) window.claude.use('sample').then(s => { sample = s; avail = !!s; if (!panel.hidden) paint(); }).catch(() => { avail = false; }); else { avail = false; }
+  R.AI = { open, ask, close, EXPERT, TOOLS };
 })();
