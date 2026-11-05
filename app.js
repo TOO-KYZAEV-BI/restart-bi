@@ -295,20 +295,24 @@
     for (const c of D.CL){ if (inn && c.inn && c.inn === inn) return { c, why: 'тот же ИНН' }; if (ph.length >= 11 && c.phone && c.phone.replace(/\D/g, '') === ph) return { c, why: 'тот же телефон' }; if (k.length >= 5 && D.nameKey(c.name) === k) return { c, why: 'то же название' }; }
     return null;
   }
-  function openForm(kind, ref){
-    const f = FORMS[kind]; if (!f) return;
+  function openForm(kind, ref, pre){
+    const f = FORMS[kind]; if (!f) return false;
     const secOf = { sale: 'sales', ship: 'sales', payin: 'sales', receipt: 'stock', transfer: 'stock', writeoff: 'stock', adjust: 'stock', cashout: 'cash', cashin: 'cash', xfer: 'cash', projexp: 'projects', party: 'parties', po: 'purch' }[kind];
-    if (!R.canEdit(secOf)){ toast('Роль «' + R.role().name + '» не может проводить такие документы', 'bad'); return; }
+    if (!R.canEdit(secOf)){ toast('Роль «' + R.role().name + '» не может проводить такие документы', 'bad'); return false; }
     const key = uid();   // ключ документа: двойное нажатие не проведёт его дважды
     U.modal(f.t, `<form id="opForm" class="opf" novalidate>${f.body(ref)}<p class="ferr" id="fErr" role="alert"></p><div class="mact"><button type="submit" class="btn-p" id="fGo">Провести</button><button type="button" class="btn-s" id="fCancel">Отмена</button><span class="small">дата операции — ${dt(T)} · пользователь — ${esc(R.role().name)}</span></div></form>`, { after: b => {
+      if (pre){ for (const [id, v] of Object.entries(pre)){ const el = b.querySelector('#' + id); if (!el || v == null) continue; if (el.type === 'checkbox') el.checked = !!v; else { if (el.tagName === 'SELECT' && ![...el.options].some(o => o.value === String(v))) continue; el.value = v; } if (el.tagName === 'SELECT' && id !== 'f_p' && id !== 'f_wh') el.dispatchEvent(new Event('change')); } }
       if (f.wire) f.wire(b);
+      if (pre){ for (const [id, v] of Object.entries(pre)){ const el = b.querySelector('#' + id); if (el && el.type !== 'checkbox' && el.tagName !== 'SELECT' && v != null){ el.value = v; if (id === 'f_price') el.dataset.touched = 1; } } const n = b.querySelector('#fErr'); n.style.color = 'var(--info)'; n.textContent = 'Форму заполнил ИИ-помощник — проверьте поля и нажмите «Провести».'; }
       b.querySelector('#fCancel').onclick = U.closeModal;
       b.querySelector('#opForm').addEventListener('submit', async e => { e.preventDefault(); const data = f.read(b, ref); if (typeof data === 'string'){ b.querySelector('#fErr').textContent = data; return; }
         const btn = b.querySelector('#fGo'); btn.disabled = true; btn.textContent = 'Проводится…';
         const ok = await post(kind, data, key); if (ok) U.closeModal(); else { btn.disabled = false; btn.textContent = 'Провести'; } });
     } });
+    return true;
   }
 
+  R.openForm = (k, ref, pre) => openForm(k, ref, pre) !== false;
   // ======================= контроль приёмки =======================
   R.runChecks = function(){
     const keep = { ...S }; const out = [];
