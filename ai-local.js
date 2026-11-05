@@ -6,6 +6,7 @@
   const R = window.RS, D = R.D, U = R.U, S = R.S, T = R.T;
   const tool = name => { const t = (R.AI && R.AI.TOOLS || []).find(x => x.name === name); if (!t) throw new Error('инструмент ' + name + ' недоступен'); return t; };
   const run = (name, inp) => tool(name).execute(inp || {});
+  const dt = U.dt;
   const mn = v => { const a = Math.abs(v || 0); return (a >= 1e6 ? U.M(v) : U.N(v)) + ' сом'; };
   const pc = v => v == null || !isFinite(v) ? '—' : String(v).replace('.', ',') + ' %';
   const has = (t, ...ws) => ws.some(w => t.includes(w));
@@ -49,7 +50,7 @@
   function months(t){
     const r = run('sales_breakdown', { by: 'month', direction: dirOf(t) }); const rows = r.rows;
     const last = rows[rows.length - 1], prev = rows[rows.length - 2];
-    let lead = `**${r.period}** · ${r.filter}.`;
+    let lead = `**${r.period}** · ${r.filter}.` + (D.monthStart(D.mOf(T) + 1) - 1 > T ? ` Текущий месяц неполный (до ${dt(T)}).` : '');
     if (last && prev){ const d = prev.revenue ? (last.revenue - prev.revenue) / prev.revenue : NaN; lead += ` ${last.name}: **${mn(last.revenue)}**, к ${prev.name} ${isFinite(d) ? (d >= 0 ? '+' : '') + (d * 100).toFixed(1).replace('.', ',') + ' %' : '—'}.`; }
     const head = ['Месяц', 'Выручка', 'ПДС', 'План', 'Выполнение']; if (cost()) head.push('Маржа');
     return lead + '\n\n' + tbl(head, rows.slice(-12).map(x => { const row = [x.name, mn(x.revenue), mn(x.pds), x.plan ? mn(x.plan) : '—', pc(x.plan_done_pct)]; if (cost()) row.push(pc(x.margin_pct)); return row; }));
@@ -169,11 +170,47 @@
     return `Сравнение **${prev || '—'}** и **${cur}** по направлениям (текущий месяц — не полный, до сегодняшнего дня).\n\n` + tbl(['Направление', prev || 'пред. месяц', cur || 'тек. месяц', 'Изменение', 'План тек. мес.'], rows);
   }
 
+
+  function seasonality(t){
+    const r = run('sales_breakdown', { by: 'month', from: D.iso(0), to: D.iso(T), direction: dirOf(t) });
+    const rows = r.rows.filter(x => x.name.indexOf(String(2025 + Math.floor(T / 400))) < 0 || true); // все месяцы с начала данных
+    const byM = {}; for (const x of rows){ const m = x.name.split(' ')[0]; byM[m] = byM[m] || { n: 0, rev: 0, pds: 0 }; byM[m].n++; byM[m].rev += x.revenue; byM[m].pds += x.pds || 0; }
+    const order = U.MONF; const avgAll = Object.values(byM).reduce((a, x) => a + x.rev / x.n, 0) / Math.max(1, Object.keys(byM).length);
+    const list = order.filter(m => byM[m]).map(m => ({ m, avg: byM[m].rev / byM[m].n, idx: avgAll ? byM[m].rev / byM[m].n / avgAll : NaN, n: byM[m].n }));
+    const peak = list.slice().sort((a, b) => b.avg - a.avg)[0], low = list.slice().sort((a, b) => a.avg - b.avg)[0];
+    const lead = `**Сезонность** по данным ${r.rows[0] ? r.rows[0].name : ''} – ${r.rows[r.rows.length - 1] ? r.rows[r.rows.length - 1].name : ''}${r.filter !== 'вся компания' ? ' · ' + r.filter : ''}. Пик — **${peak.m}** (индекс ${peak.idx.toFixed(2).replace('.', ',')}, в среднем ${mn(peak.avg)}), спад — **${low.m}** (индекс ${low.idx.toFixed(2).replace('.', ',')}, ${mn(low.avg)}). Индекс = средняя выручка месяца / средняя по всем месяцам; текущий месяц неполный и занижает свой индекс.`;
+    return lead + '\n\n' + tbl(['Месяц', 'Средняя выручка', 'Индекс сезонности', 'Лет в данных'], list.map(x => [x.m, mn(x.avg), x.idx.toFixed(2).replace('.', ','), String(x.n)])) + '\n\nПо годам:\n\n' + tbl(['Месяц', 'Выручка', 'ПДС', 'План', 'Выполнение'], r.rows.slice(-24).map(x => [x.name, mn(x.revenue), mn(x.pds), x.plan ? mn(x.plan) : '—', pc(x.plan_done_pct)]));
+  }
+  function avgCheck(t){
+    const r = run('sales_breakdown', { by: 'month', direction: dirOf(t) });
+    const tot = r.rows.reduce((a, x) => a + x.revenue, 0), n = r.rows.reduce((a, x) => a + x.orders, 0);
+    return `Средний чек за ${r.period}${r.filter !== 'вся компания' ? ' · ' + r.filter : ''}: **${mn(n ? tot / n : 0)}** (${mn(tot)} / ${n} заказов).\n\n` + tbl(['Месяц', 'Заказов', 'Выручка', 'Средний чек'], r.rows.slice(-12).map(x => [x.name, String(x.orders), mn(x.revenue), mn(x.orders ? x.revenue / x.orders : 0)]));
+  }
+  function returns(t){
+    const r = run('find_orders', { status: 'Возврат', direction: dirOf(t), from: D.iso(S.from), to: D.iso(S.to), limit: 20 });
+    return `Возвратов за ${R.perLabel()}: **${r.found}** на сумму ${mn(r.orders.reduce((a, o) => a + o.total, 0))}.\n\n` + tbl(['Заказ', 'Дата', 'Клиент', 'Менеджер', 'Сумма'], r.orders.map(o => [o.id, o.date, o.client, o.manager || '—', mn(o.total)]));
+  }
+  function unknown(raw, t){
+    // попытка найти товар или клиента по тексту вопроса
+    try { const r = run('stock_lookup', { q: raw.replace(/[?!.]/g, '') }); if (r.found && r.found < 40) return stock(t, '«' + raw.replace(/[?!.]/g, '') + '»'); } catch(e){}
+    const words = raw.replace(/[?!.,«»"]/g, ' ').split(/\s+/).filter(w => w.length >= 4).sort((a, b) => b.length - a.length);
+    for (const w of [raw.replace(/[?!.«»"]/g, '').trim(), ...words]){
+      try { const r = run('find_orders', { q: w, limit: 12 }); if (r.found){ const debt = r.orders.reduce((a, o) => a + o.debt, 0);
+        return `По запросу «${w}» найдено заказов: **${r.found}**` + (debt ? `, текущий долг по показанным: **${mn(debt)}**` : '') + '.\n\n' + tbl(['Заказ', 'Дата', 'Клиент', 'Менеджер', 'Сумма', 'Оплачено', 'Долг', 'Статус'], r.orders.map(o => [o.id, o.date, o.client, o.manager || '—', mn(o.total), mn(o.paid), mn(o.debt), o.status])); } } catch(e){} }
+    return 'Этот вопрос я во встроенном режиме не разбираю. ' + help();
+  }
+
   // ---------- маршрутизация ----------
   function answer(raw){
     const t = String(raw || '').toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
     try {
       if (has(t, 'хватит ли денег', 'хватит денег')) return enoughMoney();
+      if (has(t, 'сезон')) return seasonality(t);
+      if (has(t, 'средний чек', 'средн чек')) return avgCheck(t);
+      if (has(t, 'возврат')) return returns(t);
+      if (has(t, 'тренд', 'рост', 'падени', 'упал', 'снизил', 'выросл', 'помесячн', 'по годам')) return has(t, 'по направлен') ? monthDirs(t) : months(t);
+      if (has(t, 'марж', 'наценк', 'рентабельн')) return has(t, 'товар') ? breakdown('product', t, 'Товар') : has(t, 'клиент') ? breakdown('client', t, 'Клиент') : compareDirs(t);
+      if (has(t, 'топ') && !has(t, 'клиент', 'менеджер')) return breakdown('product', t, 'Товар');
       if (has(t, 'критери', 'приемк', 'проверь систему')) return checks();
       if (has(t, 'журнал', 'что изменял', 'что менял')) return audit();
       if (has(t, 'какие разделы', 'права', 'видит роль', 'выключен')) return access(t);
@@ -199,7 +236,7 @@
       if (has(t, 'заказ')) return orders(t, raw);
       if (has(t, 'в наличии', 'остат', 'на складе', 'есть ли', 'сколько', 'резерв', 'меньше')) return stock(t, raw);
       if (has(t, 'товар', 'продаж', 'выручк')) return breakdown('product', t, 'Товар');
-      return help();
+      return unknown(raw, t);
     } catch(e){ return 'Не могу ответить: ' + (e && e.message || 'ошибка') + '.'; }
   }
   window.RS_AI_LOCAL = { answer, note: 'Встроенный режим: отвечаю по данным системы без Claude, по заранее заданным темам. Для свободного диалога откройте RESTART BI в Claude.' };
